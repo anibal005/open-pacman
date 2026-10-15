@@ -1,0 +1,78 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  font-family: "Press Start 2P", "Courier New", monospace;
+  color: #fff;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+#game-wrap {
+  position: relative;
+  width: 560px;
+  height: 620px;
+}
+
+#game {
+  display: block;
+  background: #000;
+}
+
+#overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.85);
+}
+
+#overlay.show {
+  display: flex;
+}
+
+#overlay h1 {
+  font-size: 32px;
+  letter-spacing: 4px;
+  color: #ff0;
+}
+
+#overlay h1.win  { color: #0f0; }
+#overlay h1.lose { color: #f00; }
+
+#overlay p {
+  font-size: 14px;
+  color: #ccc;
+  letter-spacing: 1px;
+}
+
+#overlay button {
+  font-family: inherit;
+  font-size: 18px;
+  padding: 10px 28px;
+  background: transparent;
+  color: #ff0;
+  border: 2px solid #ff0;
+  cursor: pointer;
+  letter-spacing: 2px;
+}
+
+#overlay button:hover {
+  background: #ff0;
+  color: #000;
+}
