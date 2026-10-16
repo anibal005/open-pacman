@@ -5,6 +5,10 @@ const TILE = 20;
 const WALL_COLOR = '#2121ff';
 const DOOR_COLOR = '#ffb8ff';
 const DOT_COLOR = '#ffb897';
+const PELLET_COLOR = '#ffb897';
+const FRIGHT_COLOR = '#2121ff';   // azul clasico del modo asustado
+const FRIGHT_FLASH_COLOR = '#fff'; // parpadeo blanco de los ultimos 2 s
+const FRIGHT_FLASH_FRAMES = 120;  // 2 s antes de que se acabe el modo
 
 function cellCenter( x, y ) {
   return { cx: x * TILE + TILE / 2, cy: y * TILE + TILE / 2 };
@@ -79,6 +83,22 @@ function drawDots( ctx, grid ) {
   }
 }
 
+// Power pellets: mucho mas grandes que los dots y parpadeantes (pulso de
+// tamano con el frame, determinista para el render cuadro a cuadro).
+function drawPowerPellets( ctx, grid, frame ) {
+  ctx.fillStyle = PELLET_COLOR;
+  const pulse = 4 + ( Math.sin( frame * 0.12 ) * 0.5 + 0.5 ) * 3; // 4..7 px
+  for ( let y = 0; y < grid.length; y++ ) {
+    for ( let x = 0; x < grid[ 0 ].length; x++ ) {
+      if ( grid[ y ][ x ] !== 4 ) continue;
+      const { cx, cy } = cellCenter( x, y );
+      ctx.beginPath();
+      ctx.arc( cx, cy, pulse, 0, Math.PI * 2 );
+      ctx.fill();
+    }
+  }
+}
+
 function drawPacman( ctx, p, frame ) {
   const { cx, cy } = cellCenter( p.x, p.y );
   let rot = 0;
@@ -118,7 +138,13 @@ function drawGhost( ctx, g, color ) {
   ctx.closePath();
   ctx.fill();
 
-  // ojos mirando segun direccion
+  drawGhostEyes( ctx, g );
+}
+
+// Solo los ojos, mirando segun la direccion. Es lo unico que se pinta de un
+// fantasma comido (returning): sin cuerpo, jamas azul.
+function drawGhostEyes( ctx, g ) {
+  const { cx, cy } = cellCenter( g.x, g.y );
   const dir = DIRS[ g.dir ] || { x: 0, y: 0 };
   const ex = dir.x * 1.6;
   const ey = dir.y * 1.6;
@@ -163,9 +189,27 @@ function draw( ctx, game, frame ) {
   drawWalls( ctx, grid );
   drawDoor( ctx, grid );
   drawDots( ctx, grid );
+  drawPowerPellets( ctx, grid, frame );
   drawPacman( ctx, game.pacman, frame );
-  game.ghosts.forEach( ( g ) => drawGhost( ctx, g, GHOST_COLORS[ g.name ] || '#ff0000' ) );
+  game.ghosts.forEach( ( g ) => drawGameGhost( ctx, g, game, frame ) );
   drawHUD( ctx, game, W );
+}
+
+// Color y cuerpo del fantasma segun el estado de la partida:
+//   returning  -> solo ojos (fantasma comido, vuelve a la pen)
+//   asustado   -> azul, con parpadeo azul/blanco en los ultimos 2 s
+//   normal     -> su color personal
+function drawGameGhost( ctx, g, game, frame ) {
+  if ( g.returning ) {
+    drawGhostEyes( ctx, g );
+    return;
+  }
+  let color = GHOST_COLORS[ g.name ] || '#ff0000';
+  if ( game.frightTimer > 0 ) {
+    const flashing = game.frightTimer <= FRIGHT_FLASH_FRAMES && Math.floor( frame / 15 ) % 2 === 0;
+    color = flashing ? FRIGHT_FLASH_COLOR : FRIGHT_COLOR;
+  }
+  drawGhost( ctx, g, color );
 }
 
 window.draw = draw;
