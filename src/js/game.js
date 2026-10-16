@@ -19,6 +19,10 @@ const GHOST_SPEED = 0.1;    // 1/10 celda/frame
 //   ambusher -> objetivo 2 celdas delante de Pacman
 //   erratic  -> ese punto reflejado desde la posicion del rojo
 //   shy      -> persigue si esta lejos; si esta cerca, se retira a su esquina
+// La puerta de la pen (tile 3) es de un solo sentido: los fantasmas salen con
+// moveGhostInPen() y una vez fuera no vuelven a entrar. Solo la cruza el actor
+// 'ghost-returning' (g.returning), hoy nunca activo: lo define el spec de modo
+// asustado.
 const GHOST_SPECS = [
   { name: 'blinky', personality: 'chaser',   x: 13, y: 14, exitDelay: 0   },
   { name: 'pinky',  personality: 'ambusher', x: 14, y: 14, exitDelay: 90  },
@@ -71,6 +75,7 @@ function createGame() {
       exitDelay: spec.exitDelay,
       exitTimer: spec.exitDelay,
       inPen: true,
+      returning: false, // true solo cuando un fantasma vuelve a casa (spec de modo asustado)
     } ) ),
   };
 }
@@ -80,14 +85,18 @@ function aligned( v ) {
 }
 
 // Una celda es muro para el actor dado?
-//   pacman: bloqueado por pared (1) y puerta (3)
-//   ghost:  bloqueado solo por pared (1)
+//   pacman          -> bloqueado por pared (1) y puerta (3)
+//   ghost           -> bloqueado por pared (1) y puerta (3): la puerta es de
+//                      un solo sentido, un fantasma ya fuera no reentra (SPEC 02)
+//   ghost-returning -> bloqueado solo por pared (1); es el unico actor que
+//                      cruza la puerta. Punto de extension del spec de modo
+//                      asustado: nadie pone returning = true todavia.
 function isWall( grid, x, y, actor ) {
   if ( y < 0 || y >= grid.length ) return true;
   if ( x < 0 || x >= grid[ 0 ].length ) return true;
   const v = grid[ y ][ x ];
   if ( v === 1 ) return true;
-  if ( v === 3 && actor === 'pacman' ) return true;
+  if ( v === 3 && actor !== 'ghost-returning' ) return true; // puerta de un solo sentido
   return false;
 }
 
@@ -107,6 +116,12 @@ function wrapTunnel( a, width ) {
     if ( a.x < 0 ) a.x += width;
     else if ( a.x >= width ) a.x -= width;
   }
+}
+
+// Actor de un fantasma para las reglas de paso: 'ghost-returning' mientras
+// vuelve a casa, 'ghost' en cualquier otro caso (hoy todos 'ghost').
+function ghostActor( g ) {
+  return g.returning ? 'ghost-returning' : 'ghost';
 }
 
 function movePacman( game ) {
@@ -176,7 +191,7 @@ function decideGhost( game, g ) {
   const target = targetFor( game, g );
 
   const options = DIR_ORDER.filter(
-    ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir, 'ghost' )
+    ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir, ghostActor( g ) )
   );
   // Sin salida (callejon): permitir el giro de 180.
   if ( !options.length ) {
@@ -237,7 +252,7 @@ function moveGhost( game, g ) {
     g.x = Math.round( g.x );
     g.y = Math.round( g.y );
     decideGhost( game, g );
-    if ( !canMove( grid, g.x, g.y, g.dir, 'ghost' ) ) return;
+    if ( !canMove( grid, g.x, g.y, g.dir, ghostActor( g ) ) ) return;
   }
 
   const d = DIRS[ g.dir ];
@@ -259,6 +274,7 @@ function resetPositions( game ) {
     g.dir = spec.y >= PEN_MAX_Y ? 'up' : 'down';
     g.exitTimer = spec.exitDelay; // la escalera de salida se reinicia cada vida
     g.inPen = true;
+    g.returning = false;
   } );
 }
 
