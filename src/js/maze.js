@@ -51,12 +51,9 @@ const MAZE = MAZE_STR.map( ( row ) => row.split( '' ).map( parseTile ) );
 
 const TUNNEL_ROW = 14;
 const PACMAN_START = { x: 13, y: 23 };
-const GHOST_STARTS = [
-  { x: 13, y: 14, kind: 'hunter' }, // dentro de la pen
-  { x: 14, y: 14, kind: 'random' }, // dentro de la pen
-];
 
 window.MAZE = MAZE;
 window.TUNNEL_ROW = TUNNEL_ROW;
 window.PACMAN_START = PACMAN_START;
-window.GHOST_STARTS = GHOST_STARTS;
+// La configuracion de los fantasmas (posiciones, personalidad, salida de la pen)
+// vive en game.js (GHOST_SPECS): una sola fuente de verdad.
