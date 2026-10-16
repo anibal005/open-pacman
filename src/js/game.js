@@ -12,6 +12,12 @@ const OPPOSITE = { left: 'right', right: 'left', up: 'down', down: 'up' };
 
 const PACMAN_SPEED = 0.125; // 1/8 celda/frame -> alinea cada 8 frames
 const GHOST_SPEED = 0.1;    // 1/10 celda/frame
+const PELLET_SCORE = 50;           // puntos por power pellet
+const FRIGHT_FRAMES = 360;         // 6 s de modo asustado a 60 fps
+const GHOST_FRIGHT_SPEED = 0.075;  // velocidad en modo asustado
+const GHOST_EYES_SPEED = 0.2;      // velocidad de ojos
+const GHOST_EAT_SCORE = 200;       // base de la cadena 200/400/800/1600
+const PEN_REENTRY_WAIT = 60;       // 1 s en la pen antes de volver a salir
 
 // Configuracion de los 4 fantasmas: posicion de inicio, personalidad y retardo
 // de salida de la pen (en frames a 60 fps). Todo lo de los fantasmas vive aqui.
@@ -20,9 +26,9 @@ const GHOST_SPEED = 0.1;    // 1/10 celda/frame
 //   erratic  -> ese punto reflejado desde la posicion del rojo
 //   shy      -> persigue si esta lejos; si esta cerca, se retira a su esquina
 // La puerta de la pen (tile 3) es de un solo sentido: los fantasmas salen con
-// moveGhostInPen() y una vez fuera no vuelven a entrar. Solo la cruza el actor
-// 'ghost-returning' (g.returning), hoy nunca activo: lo define el spec de modo
-// asustado.
+// moveGhostInPen() y una vez fuera solo vuelve a entrar quien este en el actor
+// 'ghost-returning' (g.returning), activo cuando el fantasma ha sido comido en
+// el modo asustado.
 const GHOST_SPECS = [
   { name: 'blinky', personality: 'chaser',   x: 13, y: 14, exitDelay: 0   },
   { name: 'pinky',  personality: 'ambusher', x: 14, y: 14, exitDelay: 90  },
@@ -39,6 +45,9 @@ const PEN_MIN_Y = 13;
 const PEN_MAX_Y = 14;
 const PEN_EXIT_Y = 11;
 
+// Celda objetivo de los ojos al volver a casa: la puerta de la pen.
+const PEN_DOOR_TARGET = { x: 13, y: PEN_EXIT_Y };
+
 // Orden fijo de direcciones: desempata de forma determinista.
 const DIR_ORDER = [ 'up', 'left', 'down', 'right' ];
 
@@ -50,7 +59,8 @@ function createGame() {
   grid[ PACMAN_START.y ][ PACMAN_START.x ] = 0;
 
   let dots = 0;
-  for ( const row of grid ) for ( const v of row ) if ( v === 2 ) dots++;
+  // Dots (2) y power pellets (4): el nivel solo se gana sin ninguno de los dos.
+  for ( const row of grid ) for ( const v of row ) if ( v === 2 || v === 4 ) dots++;
 
   return {
     state: 'start',
@@ -58,6 +68,8 @@ function createGame() {
     lives: 3,
     dotsRemaining: dots,
     grid,
+    frightTimer: 0, // frames restantes de modo asustado (0 = normal)
+    ghostCombo: 0,  // fantasmas comidos desde el ultimo pellet (0..3)
     pacman: {
       x: PACMAN_START.x,
       y: PACMAN_START.y,
@@ -75,7 +87,7 @@ function createGame() {
       exitDelay: spec.exitDelay,
       exitTimer: spec.exitDelay,
       inPen: true,
-      returning: false, // true solo cuando un fantasma vuelve a casa (spec de modo asustado)
+      returning: false, // true solo cuando un fantasma vuelve a casa
     } ) ),
   };
 }
@@ -89,8 +101,8 @@ function aligned( v ) {
 //   ghost           -> bloqueado por pared (1) y puerta (3): la puerta es de
 //                      un solo sentido, un fantasma ya fuera no reentra (SPEC 02)
 //   ghost-returning -> bloqueado solo por pared (1); es el unico actor que
-//                      cruza la puerta. Punto de extension del spec de modo
-//                      asustado: nadie pone returning = true todavia.
+//                      cruza la puerta. Se activa al comer un fantasma con el
+//                      modo asustado activo.
 function isWall( grid, x, y, actor ) {
   if ( y < 0 || y >= grid.length ) return true;
   if ( x < 0 || x >= grid[ 0 ].length ) return true;
@@ -119,9 +131,18 @@ function wrapTunnel( a, width ) {
 }
 
 // Actor de un fantasma para las reglas de paso: 'ghost-returning' mientras
-// vuelve a casa, 'ghost' en cualquier otro caso (hoy todos 'ghost').
+// vuelve a casa como ojos, 'ghost' en cualquier otro caso.
 function ghostActor( g ) {
   return g.returning ? 'ghost-returning' : 'ghost';
+}
+
+// Velocidad efectiva de un fantasma sin mutar g.speed: los ojos vuelven rapido,
+// la pen no cambia con el modo y el resto baja de velocidad con el miedo.
+function ghostSpeed( game, g ) {
+  if ( g.returning ) return GHOST_EYES_SPEED;
+  if ( g.inPen ) return GHOST_SPEED;
+  if ( game.frightTimer > 0 ) return GHOST_FRIGHT_SPEED;
+  return GHOST_SPEED;
 }
 
 function movePacman( game ) {
@@ -143,6 +164,17 @@ function movePacman( game ) {
       grid[ p.y ][ p.x ] = 0;
       game.score += 10;
       game.dotsRemaining--;
+    }
+    // Comer power pellet: activa el modo asustado y revierte la marcha de los
+    // fantasmas que estan fuera de la pen (los ojos y los de dentro no).
+    else if ( grid[ p.y ][ p.x ] === 4 ) {
+      grid[ p.y ][ p.x ] = 0;
+      game.score += PELLET_SCORE;
+      game.dotsRemaining--;
+      game.frightTimer = FRIGHT_FRAMES;
+      game.ghostCombo = 0;
+      for ( const g of game.ghosts )
+        if ( !g.inPen && !g.returning ) g.dir = OPPOSITE[ g.dir ];
     }
     // Si no puede seguir, se detiene en la celda.
     if ( !canMove( grid, p.x, p.y, p.dir, 'pacman' ) ) return;
@@ -186,8 +218,69 @@ function targetFor( game, g ) {
   return dist < SHY_DISTANCE ? { x: CLYDE_CORNER.x, y: CLYDE_CORNER.y } : { x: px, y: py };
 }
 
+// BFS del fantasma hasta la puerta de la pen. Solo se usa para los ojos
+// (returning): Manhattan greedy con 180 permitido puede orbitar un bloque
+// sin acercarse nunca (Riesgos del SPEC 03), y el unico destino fijo del
+// juego es la puerta. Devuelve la primera direccion del camino, o null.
+function bfsToPenDoor( grid, sx, sy ) {
+  const W = grid[ 0 ].length;
+  const H = grid.length;
+  const start = sy * W + sx;
+  const goal = PEN_DOOR_TARGET.y * W + PEN_DOOR_TARGET.x;
+  if ( start === goal ) return null;
+  const prev = new Map( [ [ start, -1 ] ] );
+  const startDir = new Map();
+  const queue = [ start ];
+  let head = 0;
+  while ( head < queue.length ) {
+    const cur = queue[ head++ ];
+    if ( cur === goal ) break;
+    const x = cur % W;
+    const y = ( cur - x ) / W;
+    for ( const dir of DIR_ORDER ) {
+      const d = DIRS[ dir ];
+      const nx = x + d.x;
+      const ny = y + d.y;
+      if ( isWall( grid, nx, ny, 'ghost-returning' ) ) continue;
+      const k = ny * W + nx;
+      if ( prev.has( k ) ) continue;
+      prev.set( k, cur );
+      startDir.set( k, cur === start ? dir : startDir.get( cur ) );
+      queue.push( k );
+    }
+  }
+  if ( !prev.has( goal ) ) return null; // inalcanzable: no deberia pasar
+  // Reconstruir hasta el primer paso desde el inicio.
+  let cur = goal;
+  while ( prev.get( cur ) !== start && prev.get( cur ) !== -1 ) cur = prev.get( cur );
+  return startDir.get( cur ) || null;
+}
+
 function decideGhost( game, g ) {
   const grid = game.grid;
+
+  // Rama 1 (maxima prioridad): los ojos vuelven a la puerta de la pen. BFS
+  // garantiza que lleguen; es el unico caso en que se permite girar 180.
+  if ( g.returning ) {
+    const dir = bfsToPenDoor( grid, g.x, g.y );
+    if ( dir ) g.dir = dir;
+    return;
+  }
+
+  // Rama 2: modo asustado -> direccion al azar entre las validas (sin 180).
+  if ( game.frightTimer > 0 ) {
+    const options = DIR_ORDER.filter(
+      ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir, ghostActor( g ) )
+    );
+    if ( !options.length ) {
+      g.dir = OPPOSITE[ g.dir ]; // callejon sin salida
+      return;
+    }
+    g.dir = options[ Math.floor( Math.random() * options.length ) ];
+    return;
+  }
+
+  // Rama 3: personalidad normal, distancia Manhattan con desempate fijo.
   const target = targetFor( game, g );
 
   const options = DIR_ORDER.filter(
@@ -230,7 +323,7 @@ function moveGhostInPen( game, g ) {
     }
   }
 
-  g.y += DIRS[ g.dir ].y * g.speed;
+  g.y += DIRS[ g.dir ].y * ghostSpeed( game, g );
 
   if ( g.y <= PEN_EXIT_Y ) {
     g.y = PEN_EXIT_Y;
@@ -239,26 +332,54 @@ function moveGhostInPen( game, g ) {
   }
 }
 
+// Un fantasma acaba de quedar alineado en una celda: reentrada de ojos,
+// decision de direccion y comprobacion de que puede avanzar. Devuelve false
+// si queda bloqueado (no debe moverse hasta que algo cambie).
+function arriveAtCell( game, g ) {
+  g.x = Math.round( g.x );
+  g.y = Math.round( g.y );
+  // Reentrada de los ojos: alineados en la puerta de la pen, se reincorporan
+  // y esperan PEN_REENTRY_WAIT antes de volver a salir (SPEC 01).
+  if ( g.returning && g.y === PEN_EXIT_Y && ( g.x === 13 || g.x === 14 ) ) {
+    g.inPen = true;
+    g.returning = false;
+    g.exitTimer = PEN_REENTRY_WAIT;
+    g.dir = 'up';
+    return false;
+  }
+  decideGhost( game, g );
+  return canMove( game.grid, g.x, g.y, g.dir, ghostActor( g ) );
+}
+
 function moveGhost( game, g ) {
-  const grid = game.grid;
-  const width = grid[ 0 ].length;
+  const width = game.grid[ 0 ].length;
 
   if ( g.inPen ) {
     moveGhostInPen( game, g );
     return;
   }
 
-  if ( aligned( g.x ) && aligned( g.y ) ) {
-    g.x = Math.round( g.x );
-    g.y = Math.round( g.y );
-    decideGhost( game, g );
-    if ( !canMove( grid, g.x, g.y, g.dir, ghostActor( g ) ) ) return;
-  }
+  if ( aligned( g.x ) && aligned( g.y ) && !arriveAtCell( game, g ) ) return;
 
-  const d = DIRS[ g.dir ];
-  g.x += d.x * g.speed;
-  g.y += d.y * g.speed;
-  wrapTunnel( g, width );
+  // Avance en sub-pasos hasta el siguiente centro de celda. Con velocidades
+  // que no dividen 1 (0.075 asustado, 0.2 ojos) el fantasma puede quedar a
+  // media celda tras un cambio de velocidad y nunca re-alinear con pasos
+  // enteros; pararse exactamente en cada centro garantiza decidir en cada
+  // cruce. Con 0.1 la trayectoria frame a frame queda identica a antes.
+  let budget = ghostSpeed( game, g );
+  while ( budget > 1e-9 ) {
+    const d = DIRS[ g.dir ];
+    const horizontal = d.x !== 0;
+    const cur = horizontal ? g.x : g.y;
+    const nextCenter =
+      d.x + d.y > 0 ? Math.floor( cur + 1e-9 ) + 1 : Math.ceil( cur - 1e-9 ) - 1;
+    const step = Math.min( budget, Math.abs( nextCenter - cur ) );
+    if ( horizontal ) g.x += d.x * step;
+    else g.y += d.y * step;
+    budget -= step;
+    wrapTunnel( g, width );
+    if ( aligned( g.x ) && aligned( g.y ) && !arriveAtCell( game, g ) ) return;
+  }
 }
 
 function resetPositions( game ) {
@@ -267,6 +388,9 @@ function resetPositions( game ) {
   p.y = PACMAN_START.y;
   p.dir = 'left';
   p.nextDir = null;
+  // Perder una vida termina el modo asustado y la cadena de comidos.
+  game.frightTimer = 0;
+  game.ghostCombo = 0;
   game.ghosts.forEach( ( g, i ) => {
     const spec = GHOST_SPECS[ i ];
     g.x = spec.x;
@@ -283,19 +407,30 @@ function collides( a, b ) {
 }
 
 function update( game ) {
+  if ( game.frightTimer > 0 ) game.frightTimer--;
+
   movePacman( game );
   game.ghosts.forEach( ( g ) => moveGhost( game, g ) );
 
   for ( const g of game.ghosts ) {
-    if ( collides( game.pacman, g ) ) {
-      game.lives--;
-      if ( game.lives <= 0 ) {
-        game.state = 'lost';
-        return;
-      }
-      resetPositions( game );
-      break;
+    // Ojos (returning) e internos de la pen (inPen): ninguno colisiona. La
+    // pen es intocable como en el original; los ojos son inofensivos.
+    if ( g.returning || g.inPen ) continue;
+    if ( !collides( game.pacman, g ) ) continue;
+    if ( game.frightTimer > 0 ) {
+      // Modo asustado: el fantasma se come. La cadena crece 200/400/800/1600.
+      game.score += GHOST_EAT_SCORE * 2 ** game.ghostCombo;
+      game.ghostCombo = Math.min( game.ghostCombo + 1, 3 );
+      g.returning = true;
+      continue;
     }
+    game.lives--; // sin modo asustado: como hasta ahora
+    if ( game.lives <= 0 ) {
+      game.state = 'lost';
+      return;
+    }
+    resetPositions( game );
+    break;
   }
 
   if ( game.dotsRemaining <= 0 ) game.state = 'won';
